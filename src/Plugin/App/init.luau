@@ -1,3 +1,4 @@
+local Main = require(script.Components.Main)
 local React = require(script.Parent.Parent.Packages.React)
 local ReactRobloxStudioPlugin = require(script.Parent.Parent.Packages.ReactRobloxStudioPlugin)
 
@@ -34,7 +35,7 @@ local function App()
 			initialDockState = Enum.InitialDockState.Float,
 			initialFloatSize = Vector2.new(320, 240),
 			onClose = setWidgetState.off,
-		})
+		}, e(Main, {}))
 	)
 end
 

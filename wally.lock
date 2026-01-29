@@ -5,7 +5,7 @@ registry = "test"
 [[package]]
 name = "ivin/sally"
 version = "0.1.0"
-dependencies = [["React", "jsdotlua/react@17.2.1"], ["ReactRoblox", "jsdotlua/react-roblox@17.2.1"], ["ReactRobloxStudioPlugin", "thoughtspinnr/react-roblox-studio-plugin@0.1.4"], ["StudioComponents", "sircfenner/studiocomponents@1.2.0"], ["UiLabs", "pepeeltoro41/ui-labs@2.4.2"], ["Zzlib", "neura-studios/zzlib@0.1.1"]]
+dependencies = [["React", "jsdotlua/react@17.2.1"], ["ReactRoblox", "jsdotlua/react-roblox@17.2.1"], ["ReactRobloxStudioPlugin", "thoughtspinnr/react-roblox-studio-plugin@0.1.4"], ["StudioComponents", "sircfenner/studiocomponents@1.2.0"], ["Zzlib", "neura-studios/zzlib@0.1.1"]]
 
 [[package]]
 name = "jsdotlua/boolean"
@@ -95,11 +95,6 @@ dependencies = [["collections", "jsdotlua/collections@1.2.7"]]
 [[package]]
 name = "neura-studios/zzlib"
 version = "0.1.1"
-dependencies = []
-
-[[package]]
-name = "pepeeltoro41/ui-labs"
-version = "2.4.2"
 dependencies = []
 
 [[package]]

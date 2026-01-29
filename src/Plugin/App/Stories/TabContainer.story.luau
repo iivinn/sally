@@ -1,6 +1,6 @@
+local TabContainer = require(script.Parent.Parent.Components.TabContainer)
 local React = require(script.Parent.Parent.Parent.Parent.Packages.React)
 local ReactRoblox = require(script.Parent.Parent.Parent.Parent.Packages.ReactRoblox)
-local Main = require(script.Parent.Parent.Components.Main)
 
 local controls = {}
 
@@ -9,7 +9,7 @@ local story = {
 	reactRoblox = ReactRoblox,
 	controls = controls,
 	story = function()
-		return React.createElement(Main, {})
+		return React.createElement(TabContainer, {})
 	end,
 }
 

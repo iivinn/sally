@@ -1,15 +1,9 @@
 {
   "name": "Sally",
   "tree": {
-    "$className": "DataModel",
-
-    "ServerStorage": {
-      "Sally": {
-        "$path": "src",
-        "Packages": {
-          "$path": "Packages"
-        }
-      }
+    "$path": "src",
+    "Packages": {
+      "$path": "Packages"
     }
   }
 }

@@ -3,7 +3,7 @@ local ReactRoblox = require(script.Parent.Packages.ReactRoblox)
 local ReactRobloxStudioPlugin = require(script.Parent.Packages.ReactRobloxStudioPlugin)
 
 local RobloxPlugin = ReactRobloxStudioPlugin.RobloxPlugin
-local App = require(script.app)
+local App = require(script.App)
 
 local container = Instance.new("Folder")
 container.Name = "Sally"

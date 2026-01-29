@@ -1,5 +1,5 @@
-# Project place file
-/Sally.rbxlx
+# Project plugin file
+/Sally.rbxmx
 
 # Roblox Studio lock files
 /*.rbxlx.lock
@@ -8,3 +8,5 @@
 /Packages
 
 sourcemap.json
+
+lune
