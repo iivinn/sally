@@ -1,6 +1,16 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Logger = require(script.Parent.Parent.Logger)
 local React = require(script.Parent.Parent.Parent.Parent.Packages.React)
 local StudioComponents = require(script.Parent.Parent.Parent.Parent.Packages.StudioComponents)
-local Logger = require(script.Parent.Parent.Parent.Utilities.Logger)
+local Wally = require(script.Parent.Parent.Wally)
+local installPackageZip = require(script.Parent.Parent.installPackageZip)
+
+local packagesRoot = ReplicatedStorage:FindFirstChild("Packages")
+if not packagesRoot then
+    packagesRoot = Instance.new("Folder")
+    packagesRoot.Name = "Packages"
+    packagesRoot.Parent = ReplicatedStorage
+end
 
 local e = React.createElement
 
@@ -23,7 +33,7 @@ function SearchResult(props: { Scope: string, Name: string, Versions: {} })
 		}),
 		e(StudioComponents.Label, {
 			LayoutOrder = 1,
-			Text = displayText,
+			Text = displayText or "",
 			Size = UDim2.new(1, 0, 0, 0),
 		}),
 		e(StudioComponents.Dropdown, {
@@ -39,7 +49,18 @@ function SearchResult(props: { Scope: string, Name: string, Versions: {} })
 			Text = "Install",
 			AutomaticSize = Enum.AutomaticSize.XY,
 			OnActivated = function()
-				Logger:Info(`Installed {displayText}!`)
+    			local zipData = Wally:GetPackageContents(props.Scope, props.Name, selected)
+                if zipData then
+                    local packageFolder = Instance.new("Folder")
+                    packageFolder.Name = props.Name
+                    packageFolder:SetAttribute("Scope", props.Scope)
+                    packageFolder:SetAttribute("Version", selected)
+                    packageFolder.Parent = packagesRoot
+                    installPackageZip(zipData, packageFolder)
+                    Logger:Info(`Installed {props.Scope}/{props.Name}@{selected}`)
+                else
+                    Logger:Error(`Failed to fetch package contents for {props.Scope}/{props.Name}@{selected}`)
+                end
 			end,
 		})
 	)

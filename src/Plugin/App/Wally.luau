@@ -1,6 +1,6 @@
 local HttpService = game:GetService("HttpService")
 
-local Logger = require(script.Parent.Parent.Utilities.Logger)
+local Logger = require(script.Parent.Logger)
 
 local PACKAGE_CONTENTS_URL = "https://api.wally.run/v1/package-contents/%s/%s/%s"
 local PACKAGE_METADATA_URL = "https://api.wally.run/v1/package-metadata/%s/%s"

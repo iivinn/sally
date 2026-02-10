@@ -11,6 +11,17 @@ function SearchTab()
 	local text, setText = React.useState("")
 	local searchResults, setSearchResults = React.useState({})
 
+	local memoizedChildren = React.useMemo(function()
+			local children = {}
+			-- use ipairs to iterate numeric array results in order
+			for i, v in ipairs(searchResults) do
+				-- provide a stable Key for reconciliation
+				-- local key = (v.scope or "") .. "/" .. (v.name or "") .. ":" .. tostring(i)
+				children[i] = e(SearchResult, { Scope = v.scope, Name = v.name, Versions = v.versions })
+			end
+			return children
+		end, { searchResults })
+
 	return e(
 		React.Fragment,
 		nil,
@@ -30,6 +41,8 @@ function SearchTab()
 					return
 				end
 
+				setSearchResults({})
+
 				local result = HttpService:JSONDecode(Wally:SearchPackages(text))
 				setSearchResults(result)
 			end,
@@ -42,15 +55,7 @@ function SearchTab()
 				FillDirection = Enum.FillDirection.Vertical,
 			},
 			PaddingBottom = UDim.new(0, 32),
-		}, {
-			React.useMemo(function()
-				local children = {}
-				for i, v in searchResults do
-					children[i] = e(SearchResult, { Scope = v.scope, Name = v.name, Versions = v.versions })
-				end
-				return children
-			end, { searchResults }),
-		})
+		}, memoizedChildren)
 	)
 end
 
