@@ -85,6 +85,69 @@ local function writeEntry(root: Instance, zipData: string, name: string, offset:
 	end
 end
 
+local function isLuaFile(path: string)
+	return path:match("%.lua[u]?$") ~= nil
+end
+
+local function normalizeModuleName(value: string)
+	return string.lower(value:gsub("[^%w]", ""))
+end
+
+local function stripPrefix(path: string, prefix: string)
+	if prefix == "" then
+		return path
+	end
+	return path:sub(#prefix + 1)
+end
+
+local function chooseSourcePrefix(entries, packageName: string)
+	local normalizedPackageName = normalizeModuleName(packageName)
+	local bestPrefix = ""
+	local bestScore = -1
+
+	for _, prefix in ipairs({ "src/", "lib/", "" }) do
+		local luaCount = 0
+		local topLevelLuaCount = 0
+		local hasInit = false
+		local hasPackageModule = false
+
+		for _, entry in ipairs(entries) do
+			local name = entry.Name
+			if prefix == "" or name:sub(1, #prefix) == prefix then
+				local relative = stripPrefix(name, prefix)
+				if relative ~= "" and relative:sub(-1) ~= "/" and isLuaFile(relative) then
+					luaCount += 1
+					if not relative:find("/", 1, true) then
+						topLevelLuaCount += 1
+						if relative == "init.lua" or relative == "init.luau" then
+							hasInit = true
+						end
+						local moduleName = relative:gsub("%.lua[u]?$", "")
+						if normalizeModuleName(moduleName) == normalizedPackageName then
+							hasPackageModule = true
+						end
+					end
+				end
+			end
+		end
+
+		local score = luaCount + topLevelLuaCount * 10
+		if hasPackageModule then
+			score += 500
+		end
+		if hasInit then
+			score += 1000
+		end
+
+		if score > bestScore then
+			bestScore = score
+			bestPrefix = prefix
+		end
+	end
+
+	return bestPrefix
+end
+
 local function installPackageZip(zipData: string, packageFolder: Instance)
 	local packagesRoot = packageFolder.Parent
 	if not packagesRoot then
@@ -114,26 +177,50 @@ local function installPackageZip(zipData: string, packageFolder: Instance)
 
 	packageFolder:Destroy()
 
+	local entries = {}
+	for _, name, offset, size, packed, crc in zzlib.files(zipData) do
+		table.insert(entries, {
+			Name = name,
+			Offset = offset,
+			Size = size,
+			Packed = packed,
+			CRC = crc,
+		})
+	end
+
+	local sourcePrefix = chooseSourcePrefix(entries, packageName)
+	local normalizedPackageName = normalizeModuleName(packageName)
 	local rootModuleWritten = false
 	local fallbackModuleSource = nil
-	for _, name, offset, size, packed, crc in zzlib.files(zipData) do
-		if name:sub(1, 4) == "src/" then
-			local relative = name:sub(5)
+	local firstTopLevelModuleSource = nil
+	for _, entry in ipairs(entries) do
+		local name = entry.Name
+		if sourcePrefix == "" or name:sub(1, #sourcePrefix) == sourcePrefix then
+			local relative = stripPrefix(name, sourcePrefix)
 			if relative == "init.lua" or relative == "init.luau" then
-				local content = extractFile(zipData, name, offset, size, packed, crc)
+				local content = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
 				writeLuaModule(indexPackageFolder, packageName, content)
 				rootModuleWritten = true
-			elseif relative == packageName .. ".lua" or relative == packageName .. ".luau" then
-				fallbackModuleSource = extractFile(zipData, name, offset, size, packed, crc)
-				writeEntry(indexPackageFolder, zipData, relative, offset, size, packed, crc)
 			elseif relative ~= "" then
-				writeEntry(indexPackageFolder, zipData, relative, offset, size, packed, crc)
+				if isLuaFile(relative) and not relative:find("/", 1, true) then
+					local moduleName = relative:gsub("%.lua[u]?$", "")
+					local source = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
+					if normalizeModuleName(moduleName) == normalizedPackageName then
+						fallbackModuleSource = source
+					elseif not firstTopLevelModuleSource then
+						firstTopLevelModuleSource = source
+					end
+				end
+
+				writeEntry(indexPackageFolder, zipData, relative, entry.Offset, entry.Size, entry.Packed, entry.CRC)
 			end
 		end
 	end
 	if not rootModuleWritten then
 		if fallbackModuleSource then
 			writeLuaModule(indexPackageFolder, packageName, fallbackModuleSource)
+		elseif firstTopLevelModuleSource then
+			writeLuaModule(indexPackageFolder, packageName, firstTopLevelModuleSource)
 		else
 			writeLuaModule(indexPackageFolder, packageName, "return {}")
 		end
