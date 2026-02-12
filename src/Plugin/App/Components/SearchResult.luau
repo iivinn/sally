@@ -5,13 +5,6 @@ local StudioComponents = require(script.Parent.Parent.Parent.Parent.Packages.Stu
 local Wally = require(script.Parent.Parent.Wally)
 local installPackageZip = require(script.Parent.Parent.installPackageZip)
 
-local packagesRoot = ReplicatedStorage:FindFirstChild("Packages")
-if not packagesRoot then
-    packagesRoot = Instance.new("Folder")
-    packagesRoot.Name = "Packages"
-    packagesRoot.Parent = ReplicatedStorage
-end
-
 local e = React.createElement
 
 function SearchResult(props: { Scope: string, Name: string, Versions: {} })
@@ -49,6 +42,13 @@ function SearchResult(props: { Scope: string, Name: string, Versions: {} })
 			Text = "Install",
 			AutomaticSize = Enum.AutomaticSize.XY,
 			OnActivated = function()
+                local packagesRoot = ReplicatedStorage:FindFirstChild("Packages")
+                if not packagesRoot then
+                    packagesRoot = Instance.new("Folder")
+                    packagesRoot.Name = "Packages"
+                    packagesRoot.Parent = ReplicatedStorage
+                end
+
     			local zipData = Wally:GetPackageContents(props.Scope, props.Name, selected)
                 if zipData then
                     local packageFolder = Instance.new("Folder")

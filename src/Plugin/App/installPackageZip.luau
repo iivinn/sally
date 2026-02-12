@@ -115,6 +115,7 @@ local function installPackageZip(zipData: string, packageFolder: Instance)
 	packageFolder:Destroy()
 
 	local rootModuleWritten = false
+	local fallbackModuleSource = nil
 	for _, name, offset, size, packed, crc in zzlib.files(zipData) do
 		if name:sub(1, 4) == "src/" then
 			local relative = name:sub(5)
@@ -122,13 +123,20 @@ local function installPackageZip(zipData: string, packageFolder: Instance)
 				local content = extractFile(zipData, name, offset, size, packed, crc)
 				writeLuaModule(indexPackageFolder, packageName, content)
 				rootModuleWritten = true
+			elseif relative == packageName .. ".lua" or relative == packageName .. ".luau" then
+				fallbackModuleSource = extractFile(zipData, name, offset, size, packed, crc)
+				writeEntry(indexPackageFolder, zipData, relative, offset, size, packed, crc)
 			elseif relative ~= "" then
 				writeEntry(indexPackageFolder, zipData, relative, offset, size, packed, crc)
 			end
 		end
 	end
 	if not rootModuleWritten then
-		writeLuaModule(indexPackageFolder, packageName, "return {}")
+		if fallbackModuleSource then
+			writeLuaModule(indexPackageFolder, packageName, fallbackModuleSource)
+		else
+			writeLuaModule(indexPackageFolder, packageName, "return {}")
+		end
 	end
 
 	local entryModule = packagesRoot:FindFirstChild(aliasName)
