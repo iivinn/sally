@@ -63,6 +63,39 @@ local function writeLuaModule(parent: Instance, moduleName: string, source: stri
 	module.Source = source
 end
 
+local function parseScriptFileName(fileName: string)
+	local baseName = fileName:match("^(.*)%.lua[u]?$")
+	if not baseName then
+		return nil, nil, false
+	end
+
+	local serverBaseName = baseName:match("^(.*)%.server$")
+	if serverBaseName then
+		return "Script", serverBaseName, false
+	end
+
+	local clientBaseName = baseName:match("^(.*)%.client$")
+	if clientBaseName then
+		return "LocalScript", clientBaseName, false
+	end
+
+	return "ModuleScript", baseName, true
+end
+
+local function writeScriptInstance(parent: Instance, className: string, scriptName: string, source: string)
+	local instance = parent:FindFirstChild(scriptName)
+	if instance and instance.ClassName ~= className then
+		instance:Destroy()
+		instance = nil
+	end
+	if not instance then
+		instance = Instance.new(className)
+		instance.Name = scriptName
+		instance.Parent = parent
+	end
+	(instance :: LuaSourceContainer).Source = source
+end
+
 local function writeEntry(root: Instance, zipData: string, name: string, offset: number, size: number, packed: boolean, crc: number)
 	if name:sub(-1) == "/" then
 		return
@@ -70,19 +103,14 @@ local function writeEntry(root: Instance, zipData: string, name: string, offset:
 
 	local parts = splitPath(name)
 	local fileName = table.remove(parts)
-	local dir = ensureFolder(root, parts)
-
-	local content = extractFile(zipData, name, offset, size, packed, crc)
-
-	if fileName:match("%.lua[u]?$") then
-		local moduleName = fileName:gsub("%.lua[u]?$", "")
-		writeLuaModule(dir, moduleName, content)
-	else
-		local value = Instance.new("StringValue")
-		value.Name = fileName
-		value.Value = content
-		value.Parent = dir
+	local className, scriptName = parseScriptFileName(fileName)
+	if not className or not scriptName then
+		return
 	end
+
+	local dir = ensureFolder(root, parts)
+	local content = extractFile(zipData, name, offset, size, packed, crc)
+	writeScriptInstance(dir, className, scriptName, content)
 end
 
 local function isLuaFile(path: string)
@@ -204,11 +232,14 @@ local function installPackageZip(zipData: string, packageFolder: Instance)
 			elseif relative ~= "" then
 				if isLuaFile(relative) and not relative:find("/", 1, true) then
 					local moduleName = relative:gsub("%.lua[u]?$", "")
-					local source = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
-					if normalizeModuleName(moduleName) == normalizedPackageName then
-						fallbackModuleSource = source
-					elseif not firstTopLevelModuleSource then
-						firstTopLevelModuleSource = source
+					local _, _, isModuleScript = parseScriptFileName(relative)
+					if isModuleScript then
+						local source = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
+						if normalizeModuleName(moduleName) == normalizedPackageName then
+							fallbackModuleSource = source
+						elseif not firstTopLevelModuleSource then
+							firstTopLevelModuleSource = source
+						end
 					end
 				end
 
