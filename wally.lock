@@ -111,3 +111,4 @@ dependencies = []
 name = "thoughtspinnr/react-roblox-studio-plugin"
 version = "0.1.4"
 dependencies = [["React", "jsdotlua/react@17.2.1"], ["ReactRoblox", "jsdotlua/react-roblox@17.2.1"], ["Signal", "sleitnick/signal@2.0.3"]]
+
