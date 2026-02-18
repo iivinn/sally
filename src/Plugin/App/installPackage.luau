@@ -172,6 +172,63 @@ local function satisfiesComparator(version: Semver, operator: string, target: Se
 	return false
 end
 
+local function parseClauseTargetVersion(clauseRaw: string): (string?, Semver?)
+	local clause = trim(clauseRaw)
+	if clause == "" or clause == "*" then
+		return nil, nil
+	end
+
+	local prefix = clause:sub(1, 1)
+	if prefix == "^" or prefix == "~" then
+		local value = trim(clause:sub(2))
+		return value, parseSemver(value)
+	end
+
+	local operator = "="
+	local targetVersion = clause
+	local firstTwo = clause:sub(1, 2)
+	local firstOne = clause:sub(1, 1)
+	if firstTwo == ">=" or firstTwo == "<=" then
+		operator = firstTwo
+		targetVersion = trim(clause:sub(3))
+	elseif firstOne == ">" or firstOne == "<" or firstOne == "=" then
+		operator = firstOne
+		targetVersion = trim(clause:sub(2))
+	end
+
+	if targetVersion == "" then
+		return nil, nil
+	end
+
+	return targetVersion, parseSemver(targetVersion)
+end
+
+local function requirementAllowsPrerelease(requirementRaw: string?, candidateVersion: string): boolean
+	local requirement = trim(requirementRaw or "")
+	if requirement == "" or requirement == "*" then
+		return false
+	end
+
+	local exactRequirement = requirement
+	if exactRequirement:sub(1, 1) == "=" then
+		exactRequirement = trim(exactRequirement:sub(2))
+	end
+	if exactRequirement == candidateVersion then
+		return true
+	end
+
+	for _, disjunctionRaw in ipairs(splitLiteral(requirement, "||")) do
+		for _, clauseRaw in ipairs(splitLiteral(disjunctionRaw, ",")) do
+			local _, target = parseClauseTargetVersion(clauseRaw)
+			if target and #target.Prerelease > 0 then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
 local function satisfiesClause(version: Semver, clauseRaw: string): boolean
 	local clause = trim(clauseRaw)
 	if clause == "" or clause == "*" then
@@ -202,10 +259,20 @@ local function satisfiesClause(version: Semver, clauseRaw: string): boolean
 		return satisfiesComparator(version, ">=", base) and satisfiesComparator(version, "<", upperBound)
 	end
 
-	local operator, targetVersion = clause:match("^(>=|<=|>|<|=)%s*(.+)$")
-	if not operator then
-		operator = "="
-		targetVersion = clause
+	local operator = "="
+	local targetVersion = clause
+	local firstTwo = clause:sub(1, 2)
+	local firstOne = clause:sub(1, 1)
+	if firstTwo == ">=" or firstTwo == "<=" then
+		operator = firstTwo
+		targetVersion = trim(clause:sub(3))
+	elseif firstOne == ">" or firstOne == "<" or firstOne == "=" then
+		operator = firstOne
+		targetVersion = trim(clause:sub(2))
+	end
+
+	if targetVersion == "" then
+		return false
 	end
 
 	local target = parseSemver(targetVersion)
@@ -224,6 +291,9 @@ local function satisfiesRequirement(versionString: string, requirementRaw: strin
 
 	local version = parseSemver(versionString)
 	if not version then
+		return false
+	end
+	if #version.Prerelease > 0 and not requirementAllowsPrerelease(requirement, versionString) then
 		return false
 	end
 
@@ -269,27 +339,6 @@ local function buildIndexKey(scope: string, name: string, version: string)
 	return string.format("%s_%s@%s", scope, name, version)
 end
 
-local function installSinglePackage(scope: string, name: string, version: string, packagesRoot: Instance)
-	local zipData = Wally:GetPackageContents(scope, name, version)
-	if not zipData then
-		return false, string.format("Failed to fetch package contents for %s/%s@%s", scope, name, version)
-	end
-
-	local ok, result = pcall(installPackageZip, zipData, {
-		PackagesRoot = packagesRoot,
-		Scope = scope,
-		Name = name,
-		Version = version,
-		Dependencies = {},
-		ExposeAlias = true,
-	})
-	if not ok then
-		return false, string.format("Failed to install package zip for %s/%s@%s: %s", scope, name, version, tostring(result))
-	end
-
-	return true
-end
-
 local function getCachedMetadata(state: ResolverState, scope: string, name: string)
 	local packageId = buildPackageId(scope, name)
 	local cached = state.MetadataCache[packageId]
@@ -311,13 +360,23 @@ local function getCachedMetadata(state: ResolverState, scope: string, name: stri
 	return decoded
 end
 
-local function chooseVersionEntry(metadata: any, requirement: string?)
+local function collectVersionEntries(metadata: any)
 	local versions = {}
-	for _, versionEntry in ipairs(metadata.versions or {}) do
+	if type(metadata) ~= "table" or type(metadata.versions) ~= "table" then
+		return versions
+	end
+
+	for _, versionEntry in pairs(metadata.versions) do
 		if versionEntry and versionEntry.package and versionEntry.package.version then
 			table.insert(versions, versionEntry)
 		end
 	end
+
+	return versions
+end
+
+local function chooseVersionEntry(metadata: any, requirement: string?)
+	local versions = collectVersionEntries(metadata)
 
 	local trimmedRequirement = trim(requirement or "")
 	local exactRequirement = trimmedRequirement
@@ -382,8 +441,18 @@ local function resolvePackage(state: ResolverState, scope: string, name: string,
 
 	local versionEntry = chooseVersionEntry(metadata, requirement)
 	if not versionEntry then
+		local availableVersions = {}
+		for _, candidate in ipairs(collectVersionEntries(metadata)) do
+			table.insert(availableVersions, tostring(candidate.package.version))
+		end
+		local availableSample = table.concat(availableVersions, ", ")
 		state.Resolving[packageId] = nil
-		return nil, string.format("No version of %s satisfies %s", packageId, requirement or "*")
+		return nil, string.format(
+			"No version of %s satisfies %s (available: %s)",
+			packageId,
+			requirement or "*",
+			availableSample ~= "" and availableSample or "none"
+		)
 	end
 
 	local version = versionEntry.package.version
@@ -451,16 +520,7 @@ local function installPackage(scope: string, name: string, version: string, pack
 	local rootRequirement = version
 	local rootPackage, resolveError = resolvePackage(state, scope, name, rootRequirement)
 	if not rootPackage then
-		Logger:Info(
-			string.format(
-				"Dependency resolution skipped for %s/%s@%s, installing root package only (%s)",
-				scope,
-				name,
-				version,
-				tostring(resolveError)
-			)
-		)
-		return installSinglePackage(scope, name, version, packagesRoot)
+		return false, resolveError
 	end
 
 	local rootId = buildPackageId(scope, name)
@@ -488,18 +548,6 @@ local function installPackage(scope: string, name: string, version: string, pack
 			ExposeAlias = packageId == rootId,
 		})
 		if not ok then
-			if packageId == rootId then
-				Logger:Info(
-					string.format(
-						"Resolver install failed for %s/%s@%s, installing root package only (%s)",
-						scope,
-						name,
-						version,
-						tostring(installError)
-					)
-				)
-				return installSinglePackage(scope, name, version, packagesRoot)
-			end
 			return false, string.format("Failed to install %s: %s", packageId, tostring(installError))
 		end
 	end

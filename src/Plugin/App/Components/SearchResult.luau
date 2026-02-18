@@ -1,13 +1,72 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+
 local Logger = require(script.Parent.Parent.Logger)
 local React = require(script.Parent.Parent.Parent.Parent.Packages.React)
 local StudioComponents = require(script.Parent.Parent.Parent.Parent.Packages.StudioComponents)
+local Wally = require(script.Parent.Parent.Wally)
 local installPackage = require(script.Parent.Parent.installPackage)
 
 local e = React.createElement
 
+local function isPrereleaseVersion(version: string)
+	return version:find("-", 1, true) ~= nil
+end
+
+local function pickDefaultVersion(versionList: { string })
+	for _, version in ipairs(versionList) do
+		if not isPrereleaseVersion(version) then
+			return version
+		end
+	end
+	return versionList[1]
+end
+
 function SearchResult(props: { Scope: string, Name: string, Versions: {} })
-	local selected, setSelected = React.useState(props.Versions and props.Versions[1] or nil)
+	local versions, setVersions = React.useState(props.Versions or {})
+	local selected, setSelected = React.useState(props.Versions and pickDefaultVersion(props.Versions) or nil)
+
+	React.useEffect(function()
+		setVersions(props.Versions or {})
+		setSelected(props.Versions and pickDefaultVersion(props.Versions) or nil)
+
+		local body = Wally:GetPackageMetadata(props.Scope, props.Name)
+		if not body then
+			return
+		end
+
+		local decodeSuccess, metadata = pcall(HttpService.JSONDecode, HttpService, body)
+		if not decodeSuccess or type(metadata) ~= "table" or type(metadata.versions) ~= "table" then
+			return
+		end
+
+		local allVersions = {}
+		local seen = {}
+		for _, versionEntry in ipairs(metadata.versions) do
+			local version = versionEntry and versionEntry.package and versionEntry.package.version
+			if type(version) == "string" and not seen[version] then
+				seen[version] = true
+				table.insert(allVersions, version)
+			end
+		end
+
+		if #allVersions == 0 then
+			for _, versionEntry in pairs(metadata.versions) do
+				local version = versionEntry and versionEntry.package and versionEntry.package.version
+				if type(version) == "string" and not seen[version] then
+					seen[version] = true
+					table.insert(allVersions, version)
+				end
+			end
+		end
+
+		if #allVersions > 0 then
+			setVersions(allVersions)
+			if not table.find(allVersions, selected) then
+				setSelected(pickDefaultVersion(allVersions))
+			end
+		end
+	end, { props.Scope, props.Name })
 
 	local displayText = React.useMemo(function()
 		return string.format("%s/%s@%s", props.Scope, props.Name, selected)
@@ -31,7 +90,7 @@ function SearchResult(props: { Scope: string, Name: string, Versions: {} })
 			e(StudioComponents.Dropdown, {
 				LayoutOrder = 2,
 				Size = UDim2.new(0, 128, 0, 32),
-				Items = props.Versions or {},
+				Items = versions or {},
 				SelectedItem = selected,
 				DefaultText = "Select version...",
 				OnItemSelected = setSelected,

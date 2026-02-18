@@ -27,6 +27,11 @@ type ZipEntry = {
 	CRC: number,
 }
 
+type InitDirectory = {
+	ClassName: string,
+	Source: string,
+}
+
 local function splitPath(path: string)
 	local parts = {}
 	for part in string.gmatch(path, "[^/]+") do
@@ -35,18 +40,35 @@ local function splitPath(path: string)
 	return parts
 end
 
-local function ensureFolder(root: Instance, parts: { string })
+local function ensureContainerPath(root: Instance, parts: { string }, initDirectories: { [string]: InitDirectory })
 	local current = root
+	local traversedPathParts = {}
 	for _, part in ipairs(parts) do
+		table.insert(traversedPathParts, part)
+		local traversedPath = table.concat(traversedPathParts, "/")
+		local initDirectory = initDirectories[traversedPath]
 		local child = current:FindFirstChild(part)
-		if child and not child:IsA("Folder") then
-			child:Destroy()
-			child = nil
-		end
-		if not child then
-			child = Instance.new("Folder")
-			child.Name = part
-			child.Parent = current
+		if initDirectory then
+			if child and child.ClassName ~= initDirectory.ClassName then
+				child:Destroy()
+				child = nil
+			end
+			if not child then
+				child = Instance.new(initDirectory.ClassName)
+				child.Name = part
+				child.Parent = current
+			end
+			(child :: LuaSourceContainer).Source = initDirectory.Source
+		else
+			if child and not child:IsA("Folder") then
+				child:Destroy()
+				child = nil
+			end
+			if not child then
+				child = Instance.new("Folder")
+				child.Name = part
+				child.Parent = current
+			end
 		end
 		current = child
 	end
@@ -289,7 +311,60 @@ local function chooseRootModule(entries: { ZipEntry }, zipData: string, sourcePr
 	return "return {}", nil
 end
 
-local function writeEntry(root: Instance, zipData: string, name: string, offset: number, size: number, packed: boolean, crc: number)
+local function collectInitDirectories(entries: { ZipEntry }, zipData: string, sourcePrefix: string)
+	local initDirectories: { [string]: InitDirectory } = {}
+
+	for _, entry in ipairs(entries) do
+		local name = entry.Name
+		if sourcePrefix == "" or name:sub(1, #sourcePrefix) == sourcePrefix then
+			local relative = stripPrefix(name, sourcePrefix)
+			if relative ~= "" and relative:sub(-1) ~= "/" and isLuaFile(relative) then
+				local parts = splitPath(relative)
+				local fileName = table.remove(parts)
+				local className, scriptName = parseScriptFileName(fileName)
+				if className and scriptName == "init" and #parts > 0 then
+					local directoryPath = table.concat(parts, "/")
+					local source = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
+					initDirectories[directoryPath] = {
+						ClassName = className,
+						Source = source,
+					}
+				end
+			end
+		end
+	end
+
+	return initDirectories
+end
+
+local function materializeInitDirectories(root: Instance, initDirectories: { [string]: InitDirectory })
+	local directoryPaths = {}
+	for directoryPath in pairs(initDirectories) do
+		table.insert(directoryPaths, directoryPath)
+	end
+
+	table.sort(directoryPaths, function(left, right)
+		if #left ~= #right then
+			return #left < #right
+		end
+		return left < right
+	end)
+
+	for _, directoryPath in ipairs(directoryPaths) do
+		ensureContainerPath(root, splitPath(directoryPath), initDirectories)
+	end
+end
+
+local function writeEntry(
+	root: Instance,
+	initDirectories: { [string]: InitDirectory },
+	zipData: string,
+	name: string,
+	offset: number,
+	size: number,
+	packed: boolean,
+	crc: number
+)
 	if name:sub(-1) == "/" then
 		return
 	end
@@ -300,8 +375,11 @@ local function writeEntry(root: Instance, zipData: string, name: string, offset:
 	if not className or not scriptName then
 		return
 	end
+	if scriptName == "init" then
+		return
+	end
 
-	local dir = ensureFolder(root, parts)
+	local dir = ensureContainerPath(root, parts, initDirectories)
 	local content = extractFile(zipData, name, offset, size, packed, crc)
 	writeScriptInstance(dir, className, scriptName, content)
 end
@@ -358,19 +436,30 @@ local function installPackageZip(zipData: string, options: InstallPackageOptions
 	local defaultProjectPrefix = readDefaultProjectPrefix(entries, zipData)
 	local sourcePrefix = chooseSourcePrefixWithHint(entries, packageName, defaultProjectPrefix)
 	local rootSource, rootRelativePath = chooseRootModule(entries, zipData, sourcePrefix, packageName)
+	local initDirectories = collectInitDirectories(entries, zipData, sourcePrefix)
 
 	local packageModule = getOrCreateModule(indexPackageFolder, packageName)
 	for _, child in ipairs(packageModule:GetChildren()) do
 		child:Destroy()
 	end
 	packageModule.Source = rootSource
+	materializeInitDirectories(packageModule, initDirectories)
 
 	for _, entry in ipairs(entries) do
 		local name = entry.Name
 		if sourcePrefix == "" or name:sub(1, #sourcePrefix) == sourcePrefix then
 			local relative = stripPrefix(name, sourcePrefix)
 			if relative ~= "" and relative ~= rootRelativePath and isLuaFile(relative) then
-				writeEntry(packageModule, zipData, relative, entry.Offset, entry.Size, entry.Packed, entry.CRC)
+				writeEntry(
+					packageModule,
+					initDirectories,
+					zipData,
+					relative,
+					entry.Offset,
+					entry.Size,
+					entry.Packed,
+					entry.CRC
+				)
 			end
 		end
 	end
