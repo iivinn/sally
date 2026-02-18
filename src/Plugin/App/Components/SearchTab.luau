@@ -25,28 +25,35 @@ function SearchTab()
 	return e(
 		React.Fragment,
 		nil,
-		e("UIListLayout", {
-			Padding = UDim.new(0, 4),
-			FillDirection = Enum.FillDirection.Vertical,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-		}),
-		e(StudioComponents.TextInput, {
-			LayoutOrder = 1,
-			Text = text,
-			PlaceholderText = "Search packages...",
-			ClearTextOnFocus = true,
-			OnChanged = setText,
-			OnFocusLost = function(text: string, enterPressed: boolean)
-				if not enterPressed then
-					return
-				end
+			e("UIListLayout", {
+				Padding = UDim.new(0, 4),
+				FillDirection = Enum.FillDirection.Vertical,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			e(StudioComponents.TextInput, {
+				LayoutOrder = 1,
+				Text = text,
+				PlaceholderText = "Search packages...",
+				ClearTextOnFocus = true,
+				OnChanged = setText,
+				OnFocusLost = function(text: string, enterPressed: boolean)
+					if not enterPressed then
+						return
+					end
 
-				setSearchResults({})
+					setSearchResults({})
 
-				local result = HttpService:JSONDecode(Wally:SearchPackages(text))
-				setSearchResults(result)
-			end,
-		}),
+					local body = Wally:SearchPackages(text)
+					if not body then
+						return
+					end
+
+					local success, result = pcall(HttpService.JSONDecode, HttpService, body)
+					if success and type(result) == "table" then
+						setSearchResults(result)
+					end
+				end,
+			}),
 		e(StudioComponents.ScrollFrame, {
 			LayoutOrder = 2,
 			Layout = {

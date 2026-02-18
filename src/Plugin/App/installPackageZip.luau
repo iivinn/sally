@@ -1,4 +1,31 @@
+local HttpService = game:GetService("HttpService")
+
 local zzlib = require(script.Parent.Parent.Parent.Packages.Zzlib)
+
+export type ResolvedDependency = {
+	Scope: string,
+	Name: string,
+	Version: string,
+	IndexKey: string,
+}
+
+export type InstallPackageOptions = {
+	PackagesRoot: Instance,
+	Name: string,
+	Scope: string?,
+	Version: string?,
+	Dependencies: { [string]: ResolvedDependency }?,
+	ExposeAlias: boolean?,
+	AliasName: string?,
+}
+
+type ZipEntry = {
+	Name: string,
+	Offset: number,
+	Size: number,
+	Packed: boolean,
+	CRC: number,
+}
 
 local function splitPath(path: string)
 	local parts = {}
@@ -12,6 +39,10 @@ local function ensureFolder(root: Instance, parts: { string })
 	local current = root
 	for _, part in ipairs(parts) do
 		local child = current:FindFirstChild(part)
+		if child and not child:IsA("Folder") then
+			child:Destroy()
+			child = nil
+		end
 		if not child then
 			child = Instance.new("Folder")
 			child.Name = part
@@ -24,6 +55,10 @@ end
 
 local function getOrCreateFolder(parent: Instance, name: string)
 	local child = parent:FindFirstChild(name)
+	if child and not child:IsA("Folder") then
+		child:Destroy()
+		child = nil
+	end
 	if not child then
 		child = Instance.new("Folder")
 		child.Name = name
@@ -32,7 +67,7 @@ local function getOrCreateFolder(parent: Instance, name: string)
 	return child
 end
 
-local function extractFile(zipData: string, name: string, offset: number, size: number, packed: boolean, crc: number)
+local function extractFile(zipData: string, _name: string, offset: number, size: number, packed: boolean, crc: number)
 	if packed then
 		return zzlib.unzip(zipData, offset, crc)
 	end
@@ -96,23 +131,6 @@ local function writeScriptInstance(parent: Instance, className: string, scriptNa
 	(instance :: LuaSourceContainer).Source = source
 end
 
-local function writeEntry(root: Instance, zipData: string, name: string, offset: number, size: number, packed: boolean, crc: number)
-	if name:sub(-1) == "/" then
-		return
-	end
-
-	local parts = splitPath(name)
-	local fileName = table.remove(parts)
-	local className, scriptName = parseScriptFileName(fileName)
-	if not className or not scriptName then
-		return
-	end
-
-	local dir = ensureFolder(root, parts)
-	local content = extractFile(zipData, name, offset, size, packed, crc)
-	writeScriptInstance(dir, className, scriptName, content)
-end
-
 local function isLuaFile(path: string)
 	return path:match("%.lua[u]?$") ~= nil
 end
@@ -128,7 +146,49 @@ local function stripPrefix(path: string, prefix: string)
 	return path:sub(#prefix + 1)
 end
 
-local function chooseSourcePrefix(entries, packageName: string)
+local function normalizeProjectPath(path: string)
+	local normalized = path:gsub("\\", "/"):gsub("^%./", ""):gsub("/+$", "")
+	if normalized == "." or normalized == "" then
+		return ""
+	end
+	return normalized .. "/"
+end
+
+local function prefixContainsLua(entries: { ZipEntry }, prefix: string)
+	for _, entry in ipairs(entries) do
+		local name = entry.Name
+		if (prefix == "" or name:sub(1, #prefix) == prefix) and name:sub(-1) ~= "/" then
+			local relative = stripPrefix(name, prefix)
+			if relative ~= "" and isLuaFile(relative) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function readDefaultProjectPrefix(entries: { ZipEntry }, zipData: string)
+	for _, entry in ipairs(entries) do
+		if entry.Name == "default.project.json" then
+			local content = extractFile(zipData, entry.Name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
+			local ok, project = pcall(HttpService.JSONDecode, HttpService, content)
+			if ok and type(project) == "table" then
+				local tree = project.tree
+				if type(tree) == "table" and type(tree["$path"]) == "string" then
+					return normalizeProjectPath(tree["$path"])
+				end
+			end
+			break
+		end
+	end
+	return nil
+end
+
+local function chooseSourcePrefixWithHint(entries: { ZipEntry }, packageName: string, preferredPrefix: string?)
+	if preferredPrefix and prefixContainsLua(entries, preferredPrefix) then
+		return preferredPrefix
+	end
+
 	local normalizedPackageName = normalizeModuleName(packageName)
 	local bestPrefix = ""
 	local bestScore = -1
@@ -176,35 +236,7 @@ local function chooseSourcePrefix(entries, packageName: string)
 	return bestPrefix
 end
 
-local function installPackageZip(zipData: string, packageFolder: Instance)
-	local packagesRoot = packageFolder.Parent
-	if not packagesRoot then
-		return
-	end
-
-	local packageName = packageFolder.Name
-	local aliasName = toPascalCase(packageName)
-	local scope = packageFolder:GetAttribute("Scope")
-	local version = packageFolder:GetAttribute("Version")
-
-	local indexKey
-	if scope and version then
-		indexKey = string.format("%s_%s@%s", scope, packageName, version)
-	elseif version then
-		indexKey = string.format("%s@%s", packageName, version)
-	else
-		indexKey = packageName
-	end
-
-	local indexRoot = getOrCreateFolder(packagesRoot, "_Index")
-	local indexPackageFolder = getOrCreateFolder(indexRoot, indexKey)
-
-	for _, child in ipairs(indexPackageFolder:GetChildren()) do
-		child:Destroy()
-	end
-
-	packageFolder:Destroy()
-
+local function collectZipEntries(zipData: string): { ZipEntry }
 	local entries = {}
 	for _, name, offset, size, packed, crc in zzlib.files(zipData) do
 		table.insert(entries, {
@@ -215,64 +247,158 @@ local function installPackageZip(zipData: string, packageFolder: Instance)
 			CRC = crc,
 		})
 	end
+	return entries
+end
 
-	local sourcePrefix = chooseSourcePrefix(entries, packageName)
+local function chooseRootModule(entries: { ZipEntry }, zipData: string, sourcePrefix: string, packageName: string)
 	local normalizedPackageName = normalizeModuleName(packageName)
-	local rootModuleWritten = false
-	local fallbackModuleSource = nil
+	local packageCandidateSource = nil
+	local packageCandidateRelative = nil
 	local firstTopLevelModuleSource = nil
+	local firstTopLevelModuleRelative = nil
+
 	for _, entry in ipairs(entries) do
 		local name = entry.Name
 		if sourcePrefix == "" or name:sub(1, #sourcePrefix) == sourcePrefix then
 			local relative = stripPrefix(name, sourcePrefix)
-			if relative == "init.lua" or relative == "init.luau" then
-				local content = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
-				writeLuaModule(indexPackageFolder, packageName, content)
-				rootModuleWritten = true
-			elseif relative ~= "" then
-				if isLuaFile(relative) and not relative:find("/", 1, true) then
-					local moduleName = relative:gsub("%.lua[u]?$", "")
-					local _, _, isModuleScript = parseScriptFileName(relative)
-					if isModuleScript then
-						local source = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
-						if normalizeModuleName(moduleName) == normalizedPackageName then
-							fallbackModuleSource = source
-						elseif not firstTopLevelModuleSource then
-							firstTopLevelModuleSource = source
-						end
+			if relative ~= "" and not relative:find("/", 1, true) and isLuaFile(relative) then
+				local _, scriptName, isModuleScript = parseScriptFileName(relative)
+				if isModuleScript and scriptName then
+					local source = extractFile(zipData, name, entry.Offset, entry.Size, entry.Packed, entry.CRC)
+					if relative == "init.lua" or relative == "init.luau" then
+						return source, relative
+					end
+					if normalizeModuleName(scriptName) == normalizedPackageName then
+						packageCandidateSource = source
+						packageCandidateRelative = relative
+					elseif not firstTopLevelModuleSource then
+						firstTopLevelModuleSource = source
+						firstTopLevelModuleRelative = relative
 					end
 				end
-
-				writeEntry(indexPackageFolder, zipData, relative, entry.Offset, entry.Size, entry.Packed, entry.CRC)
 			end
 		end
 	end
-	if not rootModuleWritten then
-		if fallbackModuleSource then
-			writeLuaModule(indexPackageFolder, packageName, fallbackModuleSource)
-		elseif firstTopLevelModuleSource then
-			writeLuaModule(indexPackageFolder, packageName, firstTopLevelModuleSource)
-		else
-			writeLuaModule(indexPackageFolder, packageName, "return {}")
+
+	if packageCandidateSource then
+		return packageCandidateSource, packageCandidateRelative
+	end
+	if firstTopLevelModuleSource then
+		return firstTopLevelModuleSource, firstTopLevelModuleRelative
+	end
+	return "return {}", nil
+end
+
+local function writeEntry(root: Instance, zipData: string, name: string, offset: number, size: number, packed: boolean, crc: number)
+	if name:sub(-1) == "/" then
+		return
+	end
+
+	local parts = splitPath(name)
+	local fileName = table.remove(parts)
+	local className, scriptName = parseScriptFileName(fileName)
+	if not className or not scriptName then
+		return
+	end
+
+	local dir = ensureFolder(root, parts)
+	local content = extractFile(zipData, name, offset, size, packed, crc)
+	writeScriptInstance(dir, className, scriptName, content)
+end
+
+local function buildIndexKey(scope: string?, packageName: string, version: string?)
+	if scope and version then
+		return string.format("%s_%s@%s", scope, packageName, version)
+	elseif version then
+		return string.format("%s@%s", packageName, version)
+	end
+	return packageName
+end
+
+local function writeDependencyThunk(indexPackageFolder: Instance, dependencyAlias: string, dependencyIndexKey: string, dependencyName: string)
+	local source = string.format(
+		"return require(script.Parent.Parent[%q][%q])",
+		dependencyIndexKey,
+		dependencyName
+	)
+	writeLuaModule(indexPackageFolder, dependencyAlias, source)
+end
+
+local function getOrCreateModule(parent: Instance, moduleName: string)
+	local module = parent:FindFirstChild(moduleName)
+	if module and not module:IsA("ModuleScript") then
+		module:Destroy()
+		module = nil
+	end
+	if not module then
+		module = Instance.new("ModuleScript")
+		module.Name = moduleName
+		module.Parent = parent
+	end
+	return module :: ModuleScript
+end
+
+local function installPackageZip(zipData: string, options: InstallPackageOptions)
+	local packagesRoot = options.PackagesRoot
+	local packageName = options.Name
+	local scope = options.Scope
+	local version = options.Version
+	local dependencies = options.Dependencies or {}
+	local exposeAlias = options.ExposeAlias ~= false
+
+	local indexKey = buildIndexKey(scope, packageName, version)
+	local indexRoot = getOrCreateFolder(packagesRoot, "_Index")
+	local indexPackageFolder = getOrCreateFolder(indexRoot, indexKey)
+
+	for _, child in ipairs(indexPackageFolder:GetChildren()) do
+		child:Destroy()
+	end
+
+	local entries = collectZipEntries(zipData)
+	local defaultProjectPrefix = readDefaultProjectPrefix(entries, zipData)
+	local sourcePrefix = chooseSourcePrefixWithHint(entries, packageName, defaultProjectPrefix)
+	local rootSource, rootRelativePath = chooseRootModule(entries, zipData, sourcePrefix, packageName)
+
+	local packageModule = getOrCreateModule(indexPackageFolder, packageName)
+	for _, child in ipairs(packageModule:GetChildren()) do
+		child:Destroy()
+	end
+	packageModule.Source = rootSource
+
+	for _, entry in ipairs(entries) do
+		local name = entry.Name
+		if sourcePrefix == "" or name:sub(1, #sourcePrefix) == sourcePrefix then
+			local relative = stripPrefix(name, sourcePrefix)
+			if relative ~= "" and relative ~= rootRelativePath and isLuaFile(relative) then
+				writeEntry(packageModule, zipData, relative, entry.Offset, entry.Size, entry.Packed, entry.CRC)
+			end
 		end
 	end
 
-	local entryModule = packagesRoot:FindFirstChild(aliasName)
-	if entryModule and not entryModule:IsA("ModuleScript") then
-		entryModule:Destroy()
-		entryModule = nil
+	local dependencyAliases = {}
+	for dependencyAlias in pairs(dependencies) do
+		table.insert(dependencyAliases, dependencyAlias)
 	end
-	if not entryModule then
-		entryModule = Instance.new("ModuleScript")
-		entryModule.Name = aliasName
-		entryModule.Parent = packagesRoot
+	table.sort(dependencyAliases)
+
+	for _, dependencyAlias in ipairs(dependencyAliases) do
+		local dependency = dependencies[dependencyAlias]
+		if dependency and dependency.IndexKey and dependency.Name then
+			writeDependencyThunk(indexPackageFolder, dependencyAlias, dependency.IndexKey, dependency.Name)
+		end
 	end
 
-	entryModule.Source = string.format(
-		'return require(script.Parent._Index["%s"]["%s"])',
-		indexKey,
-		packageName
-	)
+	if exposeAlias then
+		local aliasName = options.AliasName or toPascalCase(packageName)
+		local source = string.format(
+			"return require(script.Parent._Index[%q][%q])",
+			indexKey,
+			packageName
+		)
+		writeLuaModule(packagesRoot, aliasName, source)
+	end
+
+	return indexKey
 end
 
 return installPackageZip

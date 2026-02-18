@@ -2,8 +2,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Logger = require(script.Parent.Parent.Logger)
 local React = require(script.Parent.Parent.Parent.Parent.Packages.React)
 local StudioComponents = require(script.Parent.Parent.Parent.Parent.Packages.StudioComponents)
-local Wally = require(script.Parent.Parent.Wally)
-local installPackageZip = require(script.Parent.Parent.installPackageZip)
+local installPackage = require(script.Parent.Parent.installPackage)
 
 local e = React.createElement
 
@@ -24,45 +23,51 @@ function SearchResult(props: { Scope: string, Name: string, Versions: {} })
 			Padding = UDim.new(0, 16),
 			SortOrder = Enum.SortOrder.LayoutOrder,
 		}),
-		e(StudioComponents.Label, {
-			LayoutOrder = 1,
-			Text = displayText or "",
-			Size = UDim2.new(1, 0, 0, 0),
-		}),
-		e(StudioComponents.Dropdown, {
-			LayoutOrder = 2,
-			Size = UDim2.new(0, 128, 0, 32),
-			Items = props.Versions or {},
-			SelectedItem = selected,
-			DefaultText = "Select version...",
-			OnItemSelected = setSelected,
-		}),
-		e(StudioComponents.MainButton, {
-			LayoutOrder = 3,
-			Text = "Install",
-			AutomaticSize = Enum.AutomaticSize.XY,
-			OnActivated = function()
-                local packagesRoot = ReplicatedStorage:FindFirstChild("Packages")
-                if not packagesRoot then
-                    packagesRoot = Instance.new("Folder")
-                    packagesRoot.Name = "Packages"
-                    packagesRoot.Parent = ReplicatedStorage
-                end
+			e(StudioComponents.Label, {
+				LayoutOrder = 1,
+				Text = displayText or "",
+				Size = UDim2.new(1, 0, 0, 0),
+			}),
+			e(StudioComponents.Dropdown, {
+				LayoutOrder = 2,
+				Size = UDim2.new(0, 128, 0, 32),
+				Items = props.Versions or {},
+				SelectedItem = selected,
+				DefaultText = "Select version...",
+				OnItemSelected = setSelected,
+			}),
+			e(StudioComponents.MainButton, {
+				LayoutOrder = 3,
+				Text = "Install",
+				AutomaticSize = Enum.AutomaticSize.XY,
+				OnActivated = function()
+					if not selected then
+						Logger:Warn(`No version selected for {props.Scope}/{props.Name}`)
+						return
+					end
 
-    			local zipData = Wally:GetPackageContents(props.Scope, props.Name, selected)
-                if zipData then
-                    local packageFolder = Instance.new("Folder")
-                    packageFolder.Name = props.Name
-                    packageFolder:SetAttribute("Scope", props.Scope)
-                    packageFolder:SetAttribute("Version", selected)
-                    packageFolder.Parent = packagesRoot
-                    installPackageZip(zipData, packageFolder)
-                    Logger:Info(`Installed {props.Scope}/{props.Name}@{selected}`)
-                else
-                    Logger:Error(`Failed to fetch package contents for {props.Scope}/{props.Name}@{selected}`)
-                end
-			end,
-		})
+					local packagesRoot = ReplicatedStorage:FindFirstChild("Packages")
+					if not packagesRoot then
+						packagesRoot = Instance.new("Folder")
+						packagesRoot.Name = "Packages"
+						packagesRoot.Parent = ReplicatedStorage
+					end
+
+					local ok, success, errorMessage = pcall(installPackage, props.Scope, props.Name, selected, packagesRoot)
+					if not ok then
+						Logger:Error(`Unexpected install crash for {props.Scope}/{props.Name}@{selected}: {tostring(success)}`)
+						return
+					end
+
+					if success then
+						Logger:Info(`Installed {props.Scope}/{props.Name}@{selected}`)
+					else
+						Logger:Error(
+							`Failed to install {props.Scope}/{props.Name}@{selected}: {errorMessage or "Unknown error"}`
+						)
+					end
+				end,
+			})
 	)
 end
 

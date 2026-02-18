@@ -18,12 +18,17 @@ function Wally:RequestAsync(url: string)
 		},
 	})
 
-	if success then
-		return response.Body
-	else
-		Logger:Warn(`HTTP {response.StatusCode}: {response.StatusMessage}`)
-		return
+	if not success then
+		Logger:Warn(`HTTP request failed for {url}: {tostring(response)}`)
+		return nil
 	end
+
+	if not response.Success then
+		Logger:Warn(`HTTP {response.StatusCode}: {response.StatusMessage} for {url}`)
+		return nil
+	end
+
+	return response.Body
 end
 
 function Wally:GetPackageContents(scope: string, name: string, version: string)
@@ -35,7 +40,7 @@ function Wally:GetPackageMetadata(scope: string, name: string)
 end
 
 function Wally:SearchPackages(query: string)
-	return self:RequestAsync(PACKAGE_SEARCH_URL:format(query))
+	return self:RequestAsync(PACKAGE_SEARCH_URL:format(HttpService:UrlEncode(query)))
 end
 
 return Wally
